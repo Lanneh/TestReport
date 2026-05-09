@@ -1,6 +1,4 @@
-// server.js
-// Node.js Express server to receive Roblox reports and send to Discord
-
+// server.js - Simplified version for downloadable JSON files
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs').promises;
@@ -10,18 +8,21 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || 'https://discord.com/api/webhooks/1370204009167585411/G5jV2PnfvTovyPzWBvolF3g3un-euXNgd4Ze0P1QhBa76mYeNMysTmJdq33JvPCbKKGw';
-const VIEWER_BASE_URL = process.env.VIEWER_BASE_URL || 'http://localhost:3000';
+
+// For ngrok or public server, use the public URL
+// For localhost testing, just use localhost
+const SERVER_URL = process.env.SERVER_URL || `http://localhost:${PORT}`;
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '50mb' })); // Allow large JSON payloads
-app.use(express.static('public')); // Serve static files (viewer)
+app.use(express.json({ limit: '50mb' }));
+app.use('/reports', express.static('reports')); // Serve JSON files for download
 
 // Data directory
 const DATA_DIR = path.join(__dirname, 'reports');
 
-// Ensure data directory exists
-async function InitializeDataDirectory() {
+// Initialize
+async function initializeDataDirectory() {
     try {
         await fs.mkdir(DATA_DIR, { recursive: true });
         console.log('[Server] Data directory initialized');
@@ -30,8 +31,8 @@ async function InitializeDataDirectory() {
     }
 }
 
-// Format file size
-function FormatBytes(bytes) {
+// Format bytes
+function formatBytes(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
@@ -39,10 +40,8 @@ function FormatBytes(bytes) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
-// Send Discord notification
-async function SendDiscordNotification(reportData) {
-    const reportUrl = `${VIEWER_BASE_URL}/viewer.html?report=${reportData.reportId}`;
-    
+// Send Discord notification with download link
+async function sendDiscordNotification(reportData, downloadUrl) {
     const embed = {
         title: '🚨 New Player Report',
         color: 0xFF5555,
@@ -78,19 +77,20 @@ async function SendDiscordNotification(reportData) {
                 inline: false
             },
             {
-                name: '🔗 View Replay',
-                value: `[Click here to view replay](${reportUrl})`,
+                name: '📥 Download Replay Data',
+                value: `[Click here to download JSON](${downloadUrl})\n\nThen open viewer.html and load this file.`,
                 inline: false
             }
         ],
         timestamp: new Date(reportData.timestamp * 1000).toISOString(),
         footer: {
-            text: 'Roblox Report System'
+            text: 'Download the JSON and open in viewer.html'
         }
     };
     
     try {
         await axios.post(DISCORD_WEBHOOK_URL, {
+            content: '⚠️ **New report submitted!** Download the replay data below.',
             embeds: [embed],
             username: 'Roblox Report Bot',
             avatar_url: 'https://cdn.icon-icons.com/icons2/2699/PNG/512/roblox_logo_icon_170891.png'
@@ -104,14 +104,11 @@ async function SendDiscordNotification(reportData) {
     }
 }
 
-// API Routes
-
-// Submit report
+// Submit report endpoint
 app.post('/api/report', async (req, res) => {
     try {
         const reportData = req.body;
         
-        // Validate
         if (!reportData || !reportData.reportId) {
             return res.status(400).json({ 
                 success: false, 
@@ -122,23 +119,27 @@ app.post('/api/report', async (req, res) => {
         console.log(`[API] Received report: ${reportData.reportId}`);
         console.log(`[API] Frames: ${reportData.metadata.frameCount}`);
         
-        // Calculate data size
         const dataSize = JSON.stringify(reportData).length;
-        console.log(`[API] Report size: ${FormatBytes(dataSize)}`);
+        console.log(`[API] Report size: ${formatBytes(dataSize)}`);
         
         // Save to file
-        const filePath = path.join(DATA_DIR, `${reportData.reportId}.json`);
+        const fileName = `${reportData.reportId}.json`;
+        const filePath = path.join(DATA_DIR, fileName);
         await fs.writeFile(filePath, JSON.stringify(reportData, null, 2));
         
         console.log(`[API] Report saved: ${filePath}`);
         
+        // Create download URL
+        const downloadUrl = `${SERVER_URL}/reports/${fileName}`;
+        
         // Send Discord notification
-        await SendDiscordNotification(reportData);
+        await sendDiscordNotification(reportData, downloadUrl);
         
         res.json({ 
             success: true, 
             reportId: reportData.reportId,
-            viewUrl: `${VIEWER_BASE_URL}/viewer.html?report=${reportData.reportId}`
+            downloadUrl: downloadUrl,
+            message: 'Report saved. Download the JSON file and open in viewer.html'
         });
         
     } catch (error) {
@@ -150,41 +151,7 @@ app.post('/api/report', async (req, res) => {
     }
 });
 
-// Get report data
-app.get('/api/report/:reportId', async (req, res) => {
-    try {
-        const { reportId } = req.params;
-        const filePath = path.join(DATA_DIR, `${reportId}.json`);
-        
-        // Check if file exists
-        try {
-            await fs.access(filePath);
-        } catch {
-            return res.status(404).json({ 
-                success: false, 
-                error: 'Report not found' 
-            });
-        }
-        
-        // Read and send file
-        const data = await fs.readFile(filePath, 'utf-8');
-        const reportData = JSON.parse(data);
-        
-        res.json({ 
-            success: true, 
-            data: reportData 
-        });
-        
-    } catch (error) {
-        console.error('[API] Error fetching report:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Internal server error' 
-        });
-    }
-});
-
-// List all reports
+// List reports
 app.get('/api/reports', async (req, res) => {
     try {
         const files = await fs.readdir(DATA_DIR);
@@ -193,21 +160,23 @@ app.get('/api/reports', async (req, res) => {
         for (const file of files) {
             if (file.endsWith('.json')) {
                 const filePath = path.join(DATA_DIR, file);
+                const stats = await fs.stat(filePath);
                 const data = await fs.readFile(filePath, 'utf-8');
                 const reportData = JSON.parse(data);
                 
                 reports.push({
                     reportId: reportData.reportId,
+                    fileName: file,
+                    downloadUrl: `${SERVER_URL}/reports/${file}`,
                     timestamp: reportData.timestamp,
                     reporter: reportData.reporter,
                     reported: reportData.reported,
                     reason: reportData.reason.substring(0, 100),
-                    frameCount: reportData.metadata.frameCount
+                    size: formatBytes(stats.size)
                 });
             }
         }
         
-        // Sort by timestamp (newest first)
         reports.sort((a, b) => b.timestamp - a.timestamp);
         
         res.json({ 
@@ -230,13 +199,18 @@ app.get('/health', (req, res) => {
 });
 
 // Start server
-async function StartServer() {
-    await InitializeDataDirectory();
+async function startServer() {
+    await initializeDataDirectory();
     
     app.listen(PORT, () => {
         console.log(`[Server] Running on port ${PORT}`);
-        console.log(`[Server] Viewer URL: ${VIEWER_BASE_URL}/viewer.html`);
+        console.log(`[Server] Reports will be saved to: ${DATA_DIR}`);
+        console.log(`[Server] Download URL base: ${SERVER_URL}/reports/`);
+        console.log(`\nTo view reports:`);
+        console.log(`1. Download the JSON file from Discord link`);
+        console.log(`2. Open viewer.html in your browser`);
+        console.log(`3. Load the JSON file\n`);
     });
 }
 
-StartServer();
+startServer();
