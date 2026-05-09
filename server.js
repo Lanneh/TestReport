@@ -9,7 +9,7 @@ const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || 'YOUR_DISCORD_WEBHOOK_URL';
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || 'https://discord.com/api/webhooks/1370204009167585411/G5jV2PnfvTovyPzWBvolF3g3un-euXNgd4Ze0P1QhBa76mYeNMysTmJdq33JvPCbKKGw';
 const VIEWER_BASE_URL = process.env.VIEWER_BASE_URL || 'http://localhost:3000';
 
 // Middleware
